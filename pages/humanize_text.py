@@ -1,9 +1,7 @@
-# pages/humanize_text.py
 import random
 import re
 import ssl
 import warnings
-
 import nltk
 import spacy
 import streamlit as st
@@ -23,11 +21,7 @@ def download_nltk_resources():
     else:
         ssl._create_default_https_context = _create_unverified_https_context
 
-    resources = [
-        'punkt',
-        'averaged_perceptron_tagger',
-        'wordnet'
-    ]
+    resources = ["punkt", "averaged_perceptron_tagger", "wordnet"]
     for r in resources:
         nltk.download(r, quiet=True)
 
@@ -49,7 +43,6 @@ CITATION_REGEX = re.compile(
     r"\(\s*[A-Za-z&\-,\.\s]+(?:et al\.\s*)?,\s*\d{4}(?:,\s*(?:pp?\.\s*\d+(?:-\d+)?))?\s*\)"
 )
 
-
 ########################################
 # Helper: Word & Sentence Counts
 ########################################
@@ -70,20 +63,20 @@ def extract_citations(text):
         placeholder = f"[[REF_{i}]]"
         placeholder_map[placeholder] = r
         replaced_text = replaced_text.replace(r, placeholder, 1)
-        # print(placeholder_map[placeholder], replaced_text)
     return replaced_text, placeholder_map
+
 PLACEHOLDER_REGEX = re.compile(r"\[\s*\[\s*REF_(\d+)\s*\]\s*\]")
+
+
 def restore_citations(text, placeholder_map):
-    restored = text.replace("[ [", "[[").replace("] ]", "]]")
-    pattern = re.compile(r"\[\[\s*(REF_\d+)\s*\]\]")
-    restored = pattern.sub(lambda m: f"[[{m.group(1)}]]", restored)
-    
-    print("restored",restored)
-    for placeholder, ref_text in placeholder_map.items():
-        print("placeholder, ref_text" , placeholder, ref_text) 
-        restored = restored.replace(placeholder,ref_text)
-        
+
+    def replace_placeholder(match):
+        placeholder = match.group(0)
+        return placeholder_map.get(placeholder, placeholder)
+
+    restored = PLACEHOLDER_REGEX.sub(replace_placeholder, text)
     return restored
+
 
 ########################################
 # Step 2: Expansions, Synonyms, & Transitions
@@ -94,8 +87,18 @@ contraction_map = {
 }
 
 ACADEMIC_TRANSITIONS = [
-    "Moreover,", "Additionally,", "Furthermore,", "Hence,",
-    "Therefore,", "Consequently,", "Nonetheless,", "Nevertheless,"
+    "Moreover,",
+    "Additionally,",
+    "Furthermore,",
+    "Hence,",
+    "Therefore,",
+    "Consequently,",
+    "Nonetheless,",
+    "Nevertheless,",
+    "In contrast,",
+    "On the other hand,",
+    "In addition,",
+    "As a result,",
 ]
 
 def expand_contractions(sentence):
@@ -117,89 +120,74 @@ def expand_contractions(sentence):
     return " ".join(expanded)
 
 def replace_synonyms(sentence, p_syn=0.2):
-    """
-    Replaces some words with synonyms outside of placeholders,
-    guided by a random chance p_syn for each eligible word.
-    """
-    tokens = word_tokenize(sentence)
-    pos_tags = nltk.pos_tag(tokens)
+    if not nlp:
+        return sentence
+
+    doc = nlp(sentence)
     new_tokens = []
-    for (word, pos) in pos_tags:
-        if "[[REF_" in word:
-            # This is a placeholder; skip synonyms
-            new_tokens.append(word)
+    for token in doc:
+        if "[[REF_" in token.text:
+            new_tokens.append(token.text)
             continue
-        if pos.startswith(('J','N','V','R')) and wordnet.synsets(word):
-            # chance of replacement
+        if token.pos_ in ["ADJ", "NOUN", "VERB", "ADV"] and wordnet.synsets(token.text):
             if random.random() < p_syn:
-                synonyms = get_synonyms(word, pos)
+                synonyms = get_synonyms(token.text, token.pos_)
                 if synonyms:
                     new_tokens.append(random.choice(synonyms))
                 else:
-                    new_tokens.append(word)
+                    new_tokens.append(token.text)
             else:
-                new_tokens.append(word)
+                new_tokens.append(token.text)
         else:
-            new_tokens.append(word)
+            new_tokens.append(token.text)
     return " ".join(new_tokens)
 
+
 def add_academic_transition(sentence, p_transition=0.2):
-    """
-    Sometimes prepend a transition, e.g. "Moreover," or "Hence,"
-    """
     if random.random() < p_transition:
         transition = random.choice(ACADEMIC_TRANSITIONS)
         return f"{transition} {sentence}"
     return sentence
 
+
 def get_synonyms(word, pos):
     wn_pos = None
-    if pos.startswith('J'):
+    if pos.startswith("ADJ"):
         wn_pos = wordnet.ADJ
-    elif pos.startswith('N'):
+    elif pos.startswith("NOUN"):
         wn_pos = wordnet.NOUN
-    elif pos.startswith('R'):
+    elif pos.startswith("ADV"):
         wn_pos = wordnet.ADV
-    elif pos.startswith('V'):
+    elif pos.startswith("VERB"):
         wn_pos = wordnet.VERB
 
     synonyms = set()
     if wn_pos:
         for syn in wordnet.synsets(word, pos=wn_pos):
             for lemma in syn.lemmas():
-                lemma_name = lemma.name().replace('_',' ')
+                lemma_name = lemma.name().replace("_", " ")
                 if lemma_name.lower() != word.lower():
                     synonyms.add(lemma_name)
     return list(synonyms)
+
 
 ########################################
 # Step 3: Minimal "Humanize" line-by-line
 ########################################
 def minimal_humanize_line(line, p_syn=0.2, p_trans=0.2):
-    """
-    For a single line of text (placeholders included):
-      - expand contractions
-      - optionally replace synonyms
-      - optionally add transitions
-    """
-    # Expand contractions
     line = expand_contractions(line)
-    # Replace synonyms
     line = replace_synonyms(line, p_syn=p_syn)
-    # Possibly add transitions
     line = add_academic_transition(line, p_transition=p_trans)
     return line
 
+
 def minimal_rewriting(text, p_syn=0.2, p_trans=0.2):
-    """
-    Splits text by lines or sentences, transforms each minimally,
-    and reassembles. 
-    """
     lines = sent_tokenize(text)
-    out_lines = []
-    for ln in lines:
-        out_lines.append(minimal_humanize_line(ln, p_syn=p_syn, p_trans=p_trans))
+    out_lines = [
+        minimal_humanize_line(ln, p_syn=p_syn, p_trans=p_trans) for ln in lines
+    ]
     return " ".join(out_lines)
+
 
 ########################################
 # Final: Show Humanize Page
@@ -220,19 +208,27 @@ def show_humanize_page():
             st.warning("Please enter some text first.")
             return
 
-        # Original counts
         orig_wc = count_words(input_text)
         orig_sc = count_sentences(input_text)
 
         with st.spinner("Rewriting text..."):
-            # 1) Extract references
             no_refs_text, placeholders = extract_citations(input_text)
-            # 2) minimal rewriting
-            partially_rewritten = minimal_rewriting(no_refs_text, p_syn=p_syn, p_trans=p_trans)
-            # 3) restore references
+            partially_rewritten = minimal_rewriting(
+                no_refs_text, p_syn=p_syn, p_trans=p_trans
+            )
             final_text = restore_citations(partially_rewritten, placeholders)
 
-        # New counts
+        # Normalize spaces around punctuation
+        final_text = re.sub(
+            r"\s+([.,;:!?])", r"\1", final_text
+        )  # Remove spaces before punctuation
+        final_text = re.sub(
+            r"(\()\s+", r"\1", final_text
+        )  # Remove spaces after opening parenthesis
+        final_text = re.sub(
+            r"\s+(\))", r")", final_text
+        )  # Remove spaces before closing parenthesis
+
         new_wc = count_words(final_text)
         new_sc = count_sentences(final_text)
 
@@ -248,3 +244,7 @@ def show_humanize_page():
             st.markdown(f"**Rewritten Sentence Count:** {new_sc}")
     else:
         st.info("Adjust probabilities above and click the button to rewrite.")
+
+# Run the app
+if __name__ == "__main__":
+    show_humanize_page()
