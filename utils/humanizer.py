@@ -6,7 +6,10 @@ from transformers import pipeline
 
 
 # Make sure NLTK resources are downloaded
-nltk.download('punkt', quiet=True)
+try:
+    nltk.data.find('tokenizers/punkt')
+except LookupError:
+    nltk.download('punkt', quiet=True)
 
 # CITATION_REGEX: attempts to match something like (Smith et al., 2023, pp. 10-12)
 CITATION_REGEX = re.compile(
